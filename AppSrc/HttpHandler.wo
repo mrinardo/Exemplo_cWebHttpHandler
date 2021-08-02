@@ -1,0 +1,26 @@
+Use cWebHttpHandler.pkg
+
+//  With the cWebHttpHandler you handle complete HTTP requests.
+Object oHttpHandler is a cWebHttpHandler
+    
+    //  The psPath property determines the path in the URL for which requests will be handled.
+    Set psPath to "HelloWorld"
+    //  Use psVerbs to filter based on the HTTP Verbs. 
+    Set psVerbs to "GET"
+
+    Procedure OnHttpGet String sPath String sAcceptType
+        Send AddHttpResponseHeader "Content-Type" "text/html"
+        Send SetResponseStatus 200 "OK" 0
+                
+        Send OutputString '<html>'
+        Send OutputString '<head>'
+        Send OutputString '<meta charset="utf-8">'
+        Send OutputString '<title>Revista 4developers - Hello world!</title>'
+        Send OutputString '</head>'
+        Send OutputString '<body><h1>Ol  mundo!</h1></body>'
+        Send OutputString '</html>'
+    End_Procedure
+    
+End_Object
+
+

@@ -1,0 +1,623 @@
+// Revista 4developers ed. 79 - Exemplo de utiliza‡Æo da classe cWebHttpHandle com web service REST simples.
+// Autor: JoÆo Maur¡cio Rinardo (Data Access Latin America)
+// Data: 14/08/2020
+//
+//
+// Neste exemplo teremos o recurso "fornecedor", contendo um subrecurso "produtos". A rela‡Æo entre eles e os m‚todos
+// HTTP utilizados estÆo elencados abaixo. Todos os dados neste exemplo utilizarÆo o formato JSON.
+//
+//  GET     /fornecedores => retorna lista de fornecedores cadastrados e ativos
+//  GET     /fornecedores/{id} => retorna dados do fornecedor referente ao {id} fornecido
+//  GET     /fornecedores/{id}/produtos => retorna lista de produtos associados ao fornecedor referente ao {id} fornecido
+//  GET     /fornecedores/{id}/produtos/{id} => retorna dados do produto referente ao {id} de fornecedor e produto fornecidos
+//  POST    /fornecedores => cria um novo fornecedor
+//  PATCH   /fornecedores/{id} => atualiza dados de um fornecedor existente
+//  DELETE  /fornecedores/{id} => inativa o registro de um fornecedor existente
+//
+
+Use cWebHttpHandler.pkg
+
+Use cVendorDataDictionary.dd
+Use cInventoryDataDictionary.dd
+
+Use Pacotes\StringFunctions.pkg
+
+// Estrutura para lista de fornecedores
+Struct tFornecedorLista
+    Integer id
+    String name
+End_Struct
+
+// Estrutura para armazenar registro da tabela VENDOR
+Struct tFornecedor
+    Integer id
+    String name
+    { Name = "address"}
+    String address_
+    String city
+    String state
+    String zip
+    String phone
+    String fax
+End_Struct
+
+// Estrutura para lista de produtos
+Struct tProdutoLista
+    String id
+    String description
+    String vendorPartId
+End_Struct
+
+// Estrutura para armazenar registro da tabela INVENTORY
+Struct tProduto
+    String id
+    String description
+    String vendorPartId
+    Number unitPrice
+    Integer onHand
+End_Struct
+
+//  With the cWebHttpHandler you handle complete HTTP requests.
+Object oExemploREST is a cWebHttpHandler
+    
+    //  The psPath property determines the path in the URL for which requests will be handled.
+    Set psPath to "ExemploREST"
+    //  Use psVerbs to filter based on the HTTP Verbs. 
+    Set psVerbs to "GET,POST,PATCH,DELETE"
+
+    Object oVendor_DD is a cVendorDataDictionary
+
+        // Posiciona registro de fornecedor e returna True para fornecedor ativo.
+        // Parƒmetros:
+        //      - String sID: Id do fornecedor a ser posicionado
+        Function PosictionarFornecedorAtivo String sID Returns Boolean
+            Boolean bRet
+
+            Get IsInteger of oStringFunctions sID to bRet
+    
+            If (bRet) Begin
+                Send Clear of oVendor_DD
+                Move sID to Vendor.ID
+                Send Find of oVendor_DD EQ 1
+    
+                Move (Found and Vendor.Active="Y") to bRet
+            End
+
+            Function_Return bRet
+        End_Function
+    End_Object
+
+    Object oInventory_DD is a cInventoryDataDictionary
+        Set DDO_Server to oVendor_DD
+        Set Constrain_File to Vendor.File_Number
+    End_Object
+
+    // Separa as partes de uma URI, retornando-as em um array
+    // Parƒmetros:
+    //      - String sPath: URI completa
+    Function SepararURI String sPath Returns String[]
+        String[] asPartesURI
+
+        If ((Right(sPath,1))="/") Move (Left(sPath,(Length(sPath)-1))) to sPath
+        Get StrSplitToArray sPath "/" to asPartesURI
+
+        Function_Return asPartesURI
+    End_Function
+
+    // Retorna True se o membro do objeto existe e possui valor. Retorna False caso contr rio.
+    //      Parƒmetros:
+    //          - Handle hoJson: objeto json onde procurar o membro
+    //          - String sMembro: nome do membro a ser procurado
+    Function ChecaMembro Handle hoJson String sMembro Returns Boolean
+        Boolean bRet bIsNull bHasMember
+        Handle hoMembro
+        
+        Get HasMember of hoJson sMembro to bHasMember
+
+        If (bHasMember) Begin
+            Get Member of hoJson sMembro to hoMembro
+            If (hoMembro) Begin
+                Get IsOfJsonType of hoMembro jsonTypeNull to bIsNull
+                Move (not(bIsNull)) to bRet
+                Send Destroy of hoMembro
+            End
+        End
+
+        Function_Return bRet
+    End_Function
+
+    //==================================================
+    // In¡cio dos m‚todos de suporte …s requisi‡äes HTTP
+    //==================================================
+
+    // Cria resposta HTTP com lista dos fornecedores ativos
+    Procedure ListarFornecedoresAtivos
+        tFornecedorLista[] avtFornecedorLista
+        Integer iTamanho
+        Handle hoJson
+        UChar[] aucDadosRetorno
+
+        Send Clear of oVendor_DD
+        Move "Y" to Vendor.Active
+        Send Find of oVendor_DD ge 3
+
+        While (Found and Vendor.Active="Y")
+            Move (SizeOfArray(avtFornecedorLista)) to iTamanho
+
+            Get Field_Current_Value of oVendor_DD Field Vendor.ID to avtFornecedorLista[iTamanho].id
+            Get Field_Current_Value of oVendor_DD Field Vendor.Name to avtFornecedorLista[iTamanho].name
+
+            Send Find of oVendor_DD gt 3
+        Loop
+
+        Get Create (RefClass(cJsonObject)) to hoJson
+        Send InitializeJsonType of hoJson jsonTypeObject
+        Send DataTypeToJson of hoJson avtFornecedorLista
+        Get StringifyUtf8 of hoJson to aucDadosRetorno
+
+        Send OutputUChar aucDadosRetorno
+
+        Send Destroy of hoJson
+    End_Procedure
+
+    // M‚todo auxiliar para retornar dados de um fornecedor numa estrutura tFornecedor
+    // Parƒmetros:
+    //      - String sIdFornecedor: Id do fornecedor cujos dados serÆo retornados
+    Function ObterFornecedor String sIdFornecedor Returns tFornecedor
+        Boolean bRet
+        tFornecedor vtFornecedor
+
+        Get PosictionarFornecedorAtivo of oVendor_DD sIdFornecedor to bRet
+
+        If (bRet) Begin
+            Get Field_Current_Value of oVendor_DD Field Vendor.ID to vtFornecedor.id
+            Get Field_Current_Value of oVendor_DD Field Vendor.Name to vtFornecedor.name
+            Get Field_Current_Value of oVendor_DD Field Vendor.Address to vtFornecedor.address_
+            Get Field_Current_Value of oVendor_DD Field Vendor.City to vtFornecedor.city
+            Get Field_Current_Value of oVendor_DD Field Vendor.State to vtFornecedor.state
+            Get Field_Current_Value of oVendor_DD Field Vendor.Zip to vtFornecedor.zip
+            Get Field_Current_Value of oVendor_DD Field Vendor.Phone_Number to vtFornecedor.phone
+            Get Field_Current_Value of oVendor_DD Field Vendor.Fax_Number to vtFornecedor.fax
+        End
+
+        Function_Return vtFornecedor
+    End_Function
+
+    // Cria resposta HTTP com dados de um fornecedor
+    // Parƒmetros:
+    //      - String sIdFornecedor: Id do fornecedor cujos dados serÆo retornados
+    Procedure ExibirFornecedor String sIdFornecedor
+        Boolean bRet
+        tFornecedor vtFornecedor        
+        Handle hoJson
+        UChar[] aucDadosRetorno
+
+        Get ObterFornecedor sIdFornecedor to vtFornecedor
+
+        If (vtFornecedor.id<>0) Begin
+            Get Create (RefClass(cJsonObject)) to hoJson
+            Send InitializeJsonType of hoJson jsonTypeObject
+            Send DataTypeToJson of hoJson vtFornecedor
+            Get StringifyUtf8 of hoJson to aucDadosRetorno
+
+            Send OutputUChar aucDadosRetorno
+
+            Send Destroy of hoJson            
+        End
+        Else Begin
+            Send SetResponseStatus 404 "Not Found" 0
+        End
+    End_Procedure
+
+    // Cria resposta HTTP com lista dos produtos do fornecedor
+    // Parƒmetros:
+    //      - String sIdFornecedor: Id do fornecedor cujos produtos serÆo retornados    
+    Procedure ListaProdutosFornecedor String sIdFornecedor
+        Boolean bRet
+        Integer iTamanho
+        tProdutoLista[] avtProdutoLista
+        Handle hoJson
+        UChar[] aucDadosRetorno
+
+        Get PosictionarFornecedorAtivo of oVendor_DD sIdFornecedor to bRet
+
+        If (bRet) Begin
+            Send Clear of oInventory_DD
+            Send Find of oInventory_DD GE 2
+
+            While (Found)
+                Move (SizeOfArray(avtProdutoLista)) to iTamanho
+
+                Get Field_Current_Value of oInventory_DD Field Inventory.Item_ID to avtProdutoLista[iTamanho].id
+                Get Field_Current_Value of oInventory_DD Field Inventory.Description to avtProdutoLista[iTamanho].description
+                Get Field_Current_Value of oInventory_DD Field Inventory.Vendor_Part_ID to avtProdutoLista[iTamanho].vendorPartId
+
+                Send Find of oInventory_DD GT 2
+            Loop
+
+            Get Create (RefClass(cJsonObject)) to hoJson
+            Send InitializeJsonType of hoJson jsonTypeObject
+            Send DataTypeToJson of hoJson avtProdutoLista
+            Get StringifyUtf8 of hoJson to aucDadosRetorno
+
+            Send OutputUChar aucDadosRetorno
+
+            Send Destroy of hoJson
+        End
+        Else Begin
+            Send SetResponseStatus 404 "Not Found" 0
+        End
+    End_Procedure
+
+    // Cria resposta HTTP com dados de um determinado produto de um fornecedor
+    // Parƒmetros:
+    //      - String sIdFornecedor: Id do fornecedor dono do produto
+    //      - String sIdItem: Id do produto cujos dados serÆo exibidos
+    Procedure ExibeProdutoFornecedor String sIdFornecedor String sIdItem
+        Boolean bRet
+        tProduto vtProduto
+        Handle hoJson
+        UChar[] aucDadosRetorno
+
+        Get PosictionarFornecedorAtivo of oVendor_DD sIdFornecedor to bRet
+
+        If (bRet) Begin
+            Send Clear of oInventory_DD
+            Move sIdItem to Inventory.Item_ID
+            Send Find of oInventory_DD EQ 1
+
+            If (Found) Begin
+                Get Field_Current_Value of oInventory_DD Field Inventory.Item_ID to vtProduto.id
+                Get Field_Current_Value of oInventory_DD Field Inventory.Description to vtProduto.description
+                Get Field_Current_Value of oInventory_DD Field Inventory.Vendor_Part_ID to vtProduto.vendorPartId
+                Get Field_Current_Value of oInventory_DD Field Inventory.Unit_Price to vtProduto.unitPrice
+                Get Field_Current_Value of oInventory_DD Field Inventory.On_Hand to vtProduto.onHand
+
+                Get Create (RefClass(cJsonObject)) to hoJson
+                Send InitializeJsonType of hoJson jsonTypeObject
+                Send DataTypeToJson of hoJson vtProduto
+                Get StringifyUtf8 of hoJson to aucDadosRetorno
+
+                Send OutputUChar aucDadosRetorno
+
+                Send Destroy of hoJson
+            End
+            Else Begin
+                Send SetResponseStatus 404 "Not Found" 0    
+            End
+        End
+        Else Begin
+            Send SetResponseStatus 404 "Not Found" 0
+        End
+    End_Procedure
+
+    // Ponto de entrada para requisi‡äes GET
+    Procedure OnHttpGet String sPath String sAcceptType
+        String[] asPartesURI
+        Integer iPartes
+
+        Forward Send OnHttpGet sPath sAcceptType
+        
+        Send AddHttpResponseHeader "Content-Type" "application/json"
+
+        Get SepararURI sPath to asPartesURI
+        Move (SizeOfArray(asPartesURI)) to iPartes
+
+        Case Begin
+            Case (iPartes=2 and asPartesURI[1]="fornecedores")
+                Send ListarFornecedoresAtivos
+                Case Break
+            Case (iPartes=3 and asPartesURI[1]="fornecedores")
+                Send ExibirFornecedor asPartesURI[2]
+                Case Break
+            Case (iPartes=4 and asPartesURI[3]="produtos")
+                Send ListaProdutosFornecedor asPartesURI[2]
+                Case Break
+            Case (iPartes=5 and asPartesURI[3]="produtos")
+                Send ExibeProdutoFornecedor asPartesURI[2] asPartesURI[4]
+                Case Break
+            Case Else
+                Send SetResponseStatus 400 "Bad Request" 0
+        Case End
+    End_Procedure
+
+    // Cria um novo registro na tabela VENDOR
+    // Parƒmetros:
+    //      - UChar[] aucDados: Dados do novo fornecedor em formato JSON
+    Procedure CriarFornecedor UChar[] aucDados
+        Boolean bRet
+        Handle hoJsonDados hoJsonErro hoJsonRetorno
+        tFornecedor vtFornecedor
+        String sError
+        UChar[] aucErro aucDadosRetorno
+
+        Send AddHttpResponseHeader "Content-Type" "application/json"
+
+        Get Create (RefClass(cJsonObject)) to hoJsonDados
+        Set pbRequireAllMembers of hoJsonDados to False
+        Get ParseUtf8 of hoJsonDados aucDados to bRet
+         
+        If (not(bRet)) Begin
+            Send SetResponseStatus 400 "Bad Request" 0
+            Procedure_Return
+        End
+
+        Move 0 to Err
+        Get JsonToDataType of hoJsonDados to vtFornecedor
+
+        If (Err) Begin
+            Send SetResponseStatus 400 "Bad Request" 0
+            Procedure_Return
+        End
+
+        Send Clear of oVendor_DD
+        Set Field_Changed_Value of oVendor_DD Field Vendor.Name to vtFornecedor.name
+        Set Field_Changed_Value of oVendor_DD Field Vendor.Address to vtFornecedor.address_
+        Set Field_Changed_Value of oVendor_DD Field Vendor.City to vtFornecedor.city
+        Set Field_Changed_Value of oVendor_DD Field Vendor.State to vtFornecedor.state
+        Set Field_Changed_Value of oVendor_DD Field Vendor.Zip to vtFornecedor.zip
+        Set Field_Changed_Value of oVendor_DD Field Vendor.Phone_Number to vtFornecedor.phone
+        Set Field_Changed_Value of oVendor_DD Field Vendor.Fax_Number to vtFornecedor.fax
+
+        Move 0 to Err
+
+        Get Request_Validate of oVendor_DD to bRet
+
+        If (not(bRet)) Begin
+            Send Request_Save of oVendor_DD
+        End
+
+        If (Err) Begin
+            Send SetResponseStatus 400 "Bad Request" 0
+
+            Get Create (RefClass(cJsonObject)) to hoJsonErro
+            Send InitializeJsonType of hoJsonErro jsonTypeObject
+         
+            Send SetMemberValue of hoJsonErro "codigo" jsonTypeInteger 400
+            Send SetMemberValue of hoJsonErro "mensagem" jsonTypeString "Falha na valida‡Æo dos dados enviados."
+         
+            Get StringifyUtf8 of hoJsonErro to aucErro
+            Send Destroy of hoJsonErro
+            Send OutputUChar aucErro
+        End
+        Else Begin
+            Send SetResponseStatus 201 "Created" 0
+            Send AddHttpResponseHeader "Location" ("/fornecedores/" + String(Vendor.ID))
+
+            Get ObterFornecedor Vendor.ID to vtFornecedor
+
+            Get Create (RefClass(cJsonObject)) to hoJsonRetorno
+            Send InitializeJsonType of hoJsonRetorno jsonTypeObject
+            Send DataTypeToJson of hoJsonRetorno vtFornecedor
+            Get StringifyUtf8 of hoJsonRetorno to aucDadosRetorno
+
+            Send OutputUChar aucDadosRetorno
+
+            Send Destroy of hoJsonRetorno
+        End
+    End_Procedure
+
+    // Ponto de entrada para requisi‡äes POST
+    Procedure OnHttpPost String sPath String sContentType String sAcceptType Integer iSize
+        String[] asPartesURI
+        Integer iPartes
+        UChar[] aucCorpo
+
+        Forward Send OnHttpPost sPath sContentType sAcceptType iSize
+        
+        Send AddHttpResponseHeader "Content-Type" "application/json"
+
+        Get SepararURI sPath to asPartesURI
+        Move (SizeOfArray(asPartesURI)) to iPartes
+
+        Get RequestDataUChar 0 to aucCorpo
+
+        Case Begin
+            Case (iPartes=2 and asPartesURI[1]="fornecedores")
+                Send CriarFornecedor aucCorpo
+                Case Break
+            Case Else
+                Send SetResponseStatus 400 "Bad Request" 0
+        Case End
+    End_Procedure
+
+    // Atualiza o registro de um fornecedor
+    // Parƒmetros:
+    //      - String sIdFornecedor: Id do fornecedor a ser atualizado
+    //      - UChar[] aucDados: Dados atualizados do fornecedor em formato JSON
+    Procedure AtualizarFornecedor String sIdFornecedor UChar[] aucDados
+        Boolean bRet
+        Handle hoJsonDados hoJsonErro hoJsonRetorno hoMembro
+        tFornecedor vtFornecedor
+        String sError
+        UChar[] aucErro aucDadosRetorno
+
+        Get PosictionarFornecedorAtivo of oVendor_DD sIdFornecedor to bRet
+
+        If (bRet) Begin
+            Get Create (RefClass(cJsonObject)) to hoJsonDados
+            Set pbRequireAllMembers of hoJsonDados to False
+            Get ParseUtf8 of hoJsonDados aucDados to bRet
+         
+            If (not(bRet)) Begin
+                Send SetResponseStatus 400 "Bad Request" 0
+                Procedure_Return
+            End
+
+            Move 0 to Err
+            Get JsonToDataType of hoJsonDados to vtFornecedor
+    
+            If (Err) Begin
+                Send SetResponseStatus 400 "Bad Request" 0
+                Procedure_Return
+            End
+
+            // Atualizar dados do registro (apenas aqueles que nÆo sÆo nulos)
+            Get ChecaMembro hoJsonDados "name" to bRet
+            If (bRet) Begin
+                Set Field_Changed_Value of oVendor_DD Field Vendor.Name to vtFornecedor.name
+            End
+
+            Get ChecaMembro hoJsonDados "address" to bRet
+            If (bRet) Begin
+                Set Field_Changed_Value of oVendor_DD Field Vendor.Address to vtFornecedor.address_
+            End
+
+            Get ChecaMembro hoJsonDados "city" to bRet
+            If (bRet) Begin
+                Set Field_Changed_Value of oVendor_DD Field Vendor.City to vtFornecedor.city
+            End
+
+            Get ChecaMembro hoJsonDados "state" to bRet
+            If (bRet) Begin
+                Set Field_Changed_Value of oVendor_DD Field Vendor.State to vtFornecedor.state
+            End
+
+            Get ChecaMembro hoJsonDados "zip" to bRet
+            If (bRet) Begin
+                Set Field_Changed_Value of oVendor_DD Field Vendor.Zip to vtFornecedor.zip
+            End
+
+            Get ChecaMembro hoJsonDados "phone" to bRet
+            If (bRet) Begin
+                Set Field_Changed_Value of oVendor_DD Field Vendor.Phone_Number to vtFornecedor.phone
+            End
+
+            Get ChecaMembro hoJsonDados "fax" to bRet
+            If (bRet) Begin
+                Set Field_Changed_Value of oVendor_DD Field Vendor.Fax_Number to vtFornecedor.fax
+            End
+
+            // Gravar registro e retornar dos dados
+            Move 0 to Err
+        
+            Get Request_Validate of oVendor_DD to bRet
+        
+            If (not(bRet)) Begin
+                Send Request_Save of oVendor_DD
+            End
+        
+            If (Err) Begin
+                Send SetResponseStatus 400 "Bad Request" 0
+        
+                Get Create (RefClass(cJsonObject)) to hoJsonErro
+                Send InitializeJsonType of hoJsonErro jsonTypeObject
+             
+                Send SetMemberValue of hoJsonErro "codigo" jsonTypeInteger 400
+                Send SetMemberValue of hoJsonErro "mensagem" jsonTypeString "Falha na valida‡Æo dos dados enviados."
+             
+                Get StringifyUtf8 of hoJsonErro to aucErro
+                Send Destroy of hoJsonErro
+                Send OutputUChar aucErro
+            End
+            Else Begin
+                Send SetResponseStatus 200 "OK" 0
+
+                Get ObterFornecedor Vendor.ID to vtFornecedor
+
+                Get Create (RefClass(cJsonObject)) to hoJsonRetorno
+                Send InitializeJsonType of hoJsonRetorno jsonTypeObject
+                Send DataTypeToJson of hoJsonRetorno vtFornecedor
+                Get StringifyUtf8 of hoJsonRetorno to aucDadosRetorno
+
+                Send OutputUChar aucDadosRetorno
+
+                Send Destroy of hoJsonRetorno
+            End
+        End
+        Else Begin
+            Send SetResponseStatus 404 "Not Found" 0
+        End
+    End_Procedure
+
+    // Ponto de entrada para requisi‡äes PATCH
+    Procedure OnHttpPatch String sPath String sContentType Integer iSize
+        String[] asPartesURI
+        Integer iPartes
+        UChar[] aucCorpo
+
+        Forward Send OnHttpPatch sPath sContentType iSize
+        
+        Send AddHttpResponseHeader "Content-Type" "application/json"
+
+        Get SepararURI sPath to asPartesURI
+        Move (SizeOfArray(asPartesURI)) to iPartes
+
+        Get RequestDataUChar 0 to aucCorpo
+
+        Case Begin
+            Case (iPartes=3 and asPartesURI[1]="fornecedores" and asPartesURI[2]<>"")
+                Send AtualizarFornecedor asPartesURI[2] aucCorpo
+                Case Break
+            Case Else
+                Send SetResponseStatus 400 "Bad Request" 0
+        Case End
+    End_Procedure
+
+    // Exclui um fornecedor da API, isto ‚, marc -lo como inativo (ACTIVE="N")
+    // Parƒmetros:
+    //      - String sIdFornecedor: Id do fornecedor a ser desativado
+    Procedure DesativarFornecedor String sIdFornecedor
+        Boolean bRet
+        Handle hoJsonErro
+        UChar[] aucErro
+
+        Get PosictionarFornecedorAtivo of oVendor_DD sIdFornecedor to bRet
+
+        If (bRet) Begin
+            Set Field_Changed_Value of oVendor_DD Field Vendor.Active to "N"
+
+            // Gravar registro e retornar dados
+            Move 0 to Err
+        
+            Get Request_Validate of oVendor_DD to bRet
+        
+            If (not(bRet)) Begin
+                Send Request_Save of oVendor_DD
+            End
+        
+            If (Err) Begin
+                Send SetResponseStatus 400 "Bad Request" 0
+        
+                Get Create (RefClass(cJsonObject)) to hoJsonErro
+                Send InitializeJsonType of hoJsonErro jsonTypeObject
+             
+                Send SetMemberValue of hoJsonErro "codigo" jsonTypeInteger 400
+                Send SetMemberValue of hoJsonErro "mensagem" jsonTypeString "Falha na exclusÆo do registro."
+             
+                Get StringifyUtf8 of hoJsonErro to aucErro
+                Send Destroy of hoJsonErro
+                Send OutputUChar aucErro
+            End
+            Else Begin
+                Send SetResponseStatus 200 "OK" 0
+            End
+
+        End
+        Else Begin
+            Send SetResponseStatus 404 "Not Found" 0
+        End
+    End_Procedure
+
+    // Ponto de entrada para requisi‡äes DELETE
+    Procedure OnHttpDelete String sPath
+        String[] asPartesURI
+        Integer iPartes
+
+        Forward Send OnHttpDelete sPath
+        
+        Send AddHttpResponseHeader "Content-Type" "application/json"
+
+        Get SepararURI sPath to asPartesURI
+        Move (SizeOfArray(asPartesURI)) to iPartes
+
+        Case Begin
+            Case (iPartes=3 and asPartesURI[1]="fornecedores" and asPartesURI[2]<>"")
+                Send DesativarFornecedor asPartesURI[2]
+                Case Break
+            Case Else
+                Send SetResponseStatus 400 "Bad Request" 0
+        Case End
+    End_Procedure
+
+End_Object
